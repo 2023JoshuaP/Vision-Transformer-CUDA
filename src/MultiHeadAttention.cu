@@ -189,35 +189,83 @@ Matrix MultiHeadAttention::forward(const Matrix& input) {
 }
 
 Matrix MultiHeadAttention::backward(const Matrix& grad_output, double learning_rate) {
-    // TODO:
-    // 1. Backprop a traves de la proyeccion de salida Wo:
-    //    grad_concat = grad_output.dot(Wo.transpose())
-    //    grad_Wo = concat_cache.transpose().dot(grad_output)
-    //    Actualizar Wo y bo.
-    //
-    // 2. Dividir grad_concat en num_heads gradientes.
-    //
-    // 3. Para cada cabeza h:
-    //    a. Backprop a traves de context = weights * V:
-    //       grad_weights_h = grad_context_h.dot(V_h.transpose())
-    //       grad_V_h = weights_h.transpose().dot(grad_context_h)
-    //    b. Backprop a traves de softmax:
-    //       grad_scores_h = softmax_backward(grad_weights_h, weights_h)
-    //    c. Backprop a traves del escalado:
-    //       grad_scores_h = grad_scores_h / sqrt(d_k)
-    //    d. Backprop a traves de Q * K^T:
-    //       grad_Q_h = grad_scores_h.dot(K_h)
-    //       grad_K_h = grad_scores_h.transpose().dot(Q_h)
-    //
-    // 4. Reconstruir grad_Q, grad_K, grad_V concatenando las cabezas.
-    //
-    // 5. Backprop a traves de las proyecciones Wq, Wk, Wv:
-    //    grad_input_q = grad_Q.dot(Wq.transpose())
-    //    grad_Wq = input_cache.transpose().dot(grad_Q)
-    //    (similar para K y V)
-    //    Actualizar Wq, Wk, Wv y sus sesgos.
-    //
-    // 6. grad_input = grad_input_q + grad_input_k + grad_input_v
-    //    Retornar grad_input.
-    return grad_output; // placeholder
+    int seq_len = grad_output.rows;
+
+    Matrix concat_cache;
+    for (int h = 0; h < num_heads_; h++) {
+        if (h == 0) concat_cache = context_cache_[h];
+        else concat_cache = concat_cache.concat_cols(context_cache_[h]);
+    }
+    
+    Matrix grad_concat = grad_output.dot(Wo_.transpose());
+    Matrix grad_Wo = concat_cache.transpose().dot(grad_output);
+    Matrix grad_bo = grad_output.col_mean() * (double)seq_len;
+    
+    Wo_ = Wo_ - (grad_Wo * learning_rate);
+    bo_ = bo_ - (grad_bo * learning_rate);
+    
+    Matrix grad_Q;
+    Matrix grad_K;
+    Matrix grad_V;
+    
+    for (int h = 0; h < num_heads_; h++) {
+        int start_col = h * d_k_;
+        int end_col = start_col + d_k_;
+        
+        Matrix grad_context_h = grad_concat.slice_cols(start_col, end_col);
+        
+        Matrix V_h = V_cache_.slice_cols(start_col, end_col);
+        Matrix weights_h = attention_weights_[h];
+        
+        Matrix grad_weights_h = grad_context_h.dot(V_h.transpose());
+        Matrix grad_V_h = weights_h.transpose().dot(grad_context_h);
+        
+        Matrix grad_scores_h(seq_len, seq_len);
+        softmax_backward_kernel<<<seq_len, 256>>>(weights_h.d_data, grad_weights_h.d_data, grad_scores_h.d_data, seq_len, seq_len);
+        CUDA_CHECK(cudaGetLastError());
+        
+        grad_scores_h = grad_scores_h / sqrt((double)d_k_);
+        
+        Matrix Q_h = Q_cache_.slice_cols(start_col, end_col);
+        Matrix K_h = K_cache_.slice_cols(start_col, end_col);
+        
+        Matrix grad_Q_h = grad_scores_h.dot(K_h);
+        Matrix grad_K_h = grad_scores_h.transpose().dot(Q_h);
+        
+        if (h == 0) {
+            grad_Q = grad_Q_h;
+            grad_K = grad_K_h;
+            grad_V = grad_V_h;
+        } else {
+            grad_Q = grad_Q.concat_cols(grad_Q_h);
+            grad_K = grad_K.concat_cols(grad_K_h);
+            grad_V = grad_V.concat_cols(grad_V_h);
+        }
+    }
+    
+    Matrix grad_input_q = grad_Q.dot(Wq_.transpose());
+    Matrix grad_Wq = input_cache_.transpose().dot(grad_Q);
+    Matrix grad_bq = grad_Q.col_mean() * (double)seq_len;
+    
+    Matrix grad_input_k = grad_K.dot(Wk_.transpose());
+    Matrix grad_Wk = input_cache_.transpose().dot(grad_K);
+    Matrix grad_bk = grad_K.col_mean() * (double)seq_len;
+    
+    Matrix grad_input_v = grad_V.dot(Wv_.transpose());
+    Matrix grad_Wv = input_cache_.transpose().dot(grad_V);
+    Matrix grad_bv = grad_V.col_mean() * (double)seq_len;
+    
+    Wq_ = Wq_ - (grad_Wq * learning_rate);
+    bq_ = bq_ - (grad_bq * learning_rate);
+    
+    Wk_ = Wk_ - (grad_Wk * learning_rate);
+    bk_ = bk_ - (grad_bk * learning_rate);
+    
+    Wv_ = Wv_ - (grad_Wv * learning_rate);
+    bv_ = bv_ - (grad_bv * learning_rate);
+    
+    Matrix grad_input = grad_input_q + grad_input_k;
+    grad_input = grad_input + grad_input_v;
+    
+    return grad_input;
 }
