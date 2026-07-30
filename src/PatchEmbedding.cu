@@ -137,7 +137,67 @@ PatchEmbedding::PatchEmbedding(int input_channels, int image_height, int image_w
 PatchEmbedding::~PatchEmbedding() {}
 
 Matrix PatchEmbedding::forward(const Tensor3D& image) {
-    return Matrix(); // placeholder
+    // -----------------------------------------------------------------------
+    // Paso 1: CNN -> ReLU -> Pooling
+    // -----------------------------------------------------------------------
+    Tensor3D conv_out = conv_layer_.forward(image);
+    Tensor3D relu_out = relu_layer_.forward(conv_out);
+    cnn_output_cache_ = pool_layer_.forward(relu_out);
+
+    // -----------------------------------------------------------------------
+    // Paso 2: Extraer y aplanar parches -> (num_patches, patch_dim)
+    // -----------------------------------------------------------------------
+    int num_patches_h = feature_h_ / patch_h_;
+    int num_patches_w = feature_w_ / patch_w_;
+
+    patches_flat_cache_ = Matrix(num_patches_, patch_dim_, 0.0);
+
+    int threads = 256;
+    int blocks  = (num_patches_ + threads - 1) / threads;
+    extract_patches_kernel<<<blocks, threads>>>(
+        cnn_output_cache_.d_data,
+        patches_flat_cache_.d_data,
+        feature_c_, feature_h_, feature_w_,
+        patch_h_, patch_w_,
+        num_patches_h, num_patches_w
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 3: Proyeccion lineal: (num_patches, patch_dim) @ W_proj + b_proj
+    //         -> (num_patches, d_model)
+    // -----------------------------------------------------------------------
+    Matrix projected = patches_flat_cache_.dot(W_proj_);
+    int total_proj   = num_patches_ * d_model_;
+    int bblocks      = (total_proj + threads - 1) / threads;
+    add_row_bias_kernel<<<bblocks, threads>>>(
+        projected.d_data, b_proj_.d_data,
+        num_patches_, d_model_
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 4: Prepend del token [CLS] -> (num_patches+1, d_model)
+    //         fila 0 = cls_token_; filas 1..N = projected
+    // -----------------------------------------------------------------------
+    int seq_len = num_patches_ + 1;
+    Matrix output(seq_len, d_model_, 0.0);
+
+    cudaMemcpy(output.d_data,
+               cls_token_.d_data,
+               d_model_ * sizeof(double),
+               cudaMemcpyDeviceToDevice);
+    cudaMemcpy(output.d_data + d_model_,
+               projected.d_data,
+               (size_t)num_patches_ * d_model_ * sizeof(double),
+               cudaMemcpyDeviceToDevice);
+
+    // -----------------------------------------------------------------------
+    // Paso 5: Sumar positional embeddings element-wise
+    // -----------------------------------------------------------------------
+    output = output + pos_embeddings_;
+
+    return output;
 }
 
 Tensor3D PatchEmbedding::backward(const Matrix& grad_output, double learning_rate) {
