@@ -1,22 +1,97 @@
 #include "MultiHeadAttention.cuh"
 #include <cmath>
 
-// TODO: Kernel CUDA que aplica Softmax por filas a una matriz.
-// Cada bloque de hilos procesa una fila:
-//   1. Encontrar el maximo de la fila (para estabilidad numerica).
-//   2. Calcular exp(x_i - max) para cada elemento.
-//   3. Sumar todos los exponenciales.
-//   4. Dividir cada exponencial por la suma total.
-// __global__ void softmax_kernel(...)
+__global__ void softmax_kernel(const double* input, double* output, int rows, int cols) {
+    int row = blockIdx.x; // Un bloque por fila
+    int tid = threadIdx.x;
+    
+    if (row < rows) {
+        // Encontrar el maximo para estabilidad numerica
+        double max_val = -INFINITY;
+        for (int col = tid; col < cols; col += blockDim.x) {
+            if (input[row * cols + col] > max_val) {
+                max_val = input[row * cols + col];
+            }
+        }
+        
+        // Reduccion para el maximo
+        __shared__ double shared_max[256];
+        shared_max[tid] = max_val;
+        __syncthreads();
+        
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                if (shared_max[tid + s] > shared_max[tid]) {
+                    shared_max[tid] = shared_max[tid + s];
+                }
+            }
+            __syncthreads();
+        }
+        max_val = shared_max[0];
+        
+        // Calcular exponenciales y suma local
+        double sum_exp = 0.0;
+        for (int col = tid; col < cols; col += blockDim.x) {
+            double val = exp(input[row * cols + col] - max_val);
+            output[row * cols + col] = val; // Guardar temporalmente
+            sum_exp += val;
+        }
+        
+        // Reduccion para la suma
+        __shared__ double shared_sum[256];
+        shared_sum[tid] = sum_exp;
+        __syncthreads();
+        
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                shared_sum[tid] += shared_sum[tid + s];
+            }
+            __syncthreads();
+        }
+        sum_exp = shared_sum[0];
+        
+        // Dividir por la suma total
+        for (int col = tid; col < cols; col += blockDim.x) {
+            output[row * cols + col] /= sum_exp;
+        }
+    }
+}
 
-// TODO: Kernel CUDA para el backward de Softmax.
-// Dada la salida S del softmax y el gradiente dL/dS, calcula dL/dX:
-//   dL/dX_i = S_i * (dL/dS_i - sum_j(dL/dS_j * S_j))
-// __global__ void softmax_backward_kernel(...)
+__global__ void softmax_backward_kernel(const double* S, const double* dL_dS, double* dL_dX, int rows, int cols) {
+    int row = blockIdx.x;
+    int tid = threadIdx.x;
+    
+    if (row < rows) {
+        double sum_dS_S = 0.0;
+        for (int col = tid; col < cols; col += blockDim.x) {
+            sum_dS_S += dL_dS[row * cols + col] * S[row * cols + col];
+        }
+        
+        __shared__ double shared_sum[256];
+        shared_sum[tid] = sum_dS_S;
+        __syncthreads();
+        
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                shared_sum[tid] += shared_sum[tid + s];
+            }
+            __syncthreads();
+        }
+        double total_sum = shared_sum[0];
+        
+        for (int col = tid; col < cols; col += blockDim.x) {
+            dL_dX[row * cols + col] = S[row * cols + col] * (dL_dS[row * cols + col] - total_sum);
+        }
+    }
+}
 
-// TODO: Kernel CUDA que suma un sesgo (bias) a cada fila de una matriz.
-// output[row][col] = input[row][col] + bias[col]
-// __global__ void add_bias_kernel(...)
+__global__ void add_bias_kernel(const double* input, const double* bias, double* output, int rows, int cols) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < rows * cols) {
+        int col = idx % cols;
+        output[idx] = input[idx] + bias[col];
+    }
+}
 
 MultiHeadAttention::MultiHeadAttention(int d_model, int num_heads, int seed)
     : d_model_(d_model), num_heads_(num_heads), d_k_(d_model / num_heads) {
