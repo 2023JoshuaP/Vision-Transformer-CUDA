@@ -111,7 +111,27 @@ PatchEmbedding::PatchEmbedding(int input_channels, int image_height, int image_w
       cnn_output_cache_(), patches_flat_cache_(),
       W_proj_(), b_proj_(), cls_token_(), pos_embeddings_()
 {
-    // TODO: implementar en el siguiente commit
+    // 1. Dimensiones del feature map tras CNN + Pooling
+    int conv_h = ConvolutionalLayer::size_out(image_height, cnn_kernel, cnn_stride, cnn_padding);
+    int conv_w = ConvolutionalLayer::size_out(image_width,  cnn_kernel, cnn_stride, cnn_padding);
+    feature_h_ = PoolingLayer::output_size(conv_h, pool_size, pool_stride);
+    feature_w_ = PoolingLayer::output_size(conv_w, pool_size, pool_stride);
+    feature_c_ = cnn_out_channels;
+
+    // 2. Numero de parches y dimension aplanada de cada parche
+    num_patches_ = (feature_h_ / patch_h_) * (feature_w_ / patch_w_);
+    patch_dim_   = feature_c_ * patch_h_ * patch_w_;
+
+    // 3. W_proj (patch_dim, d_model) Xavier; b_proj (1, d_model) = 0
+    mt19937 rng(seed);
+    double xavier_scale = sqrt(2.0 / (patch_dim_ + d_model_));
+    W_proj_ = gpu_random(patch_dim_, d_model_, xavier_scale, rng);
+    b_proj_ = gpu_zeros(1, d_model_);
+
+    // 4. cls_token (1, d_model) y pos_embeddings (num_patches+1, d_model)
+    //    con valores pequenos para romper simetria
+    cls_token_      = gpu_random(1, d_model_, 0.02, rng);
+    pos_embeddings_ = gpu_random(num_patches_ + 1, d_model_, 0.02, rng);
 }
 
 PatchEmbedding::~PatchEmbedding() {}
