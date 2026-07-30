@@ -201,5 +201,83 @@ Matrix PatchEmbedding::forward(const Tensor3D& image) {
 }
 
 Tensor3D PatchEmbedding::backward(const Matrix& grad_output, double learning_rate) {
-    return Tensor3D(); // placeholder
+    int threads = 256;
+
+    // -----------------------------------------------------------------------
+    // Paso 1: Separar gradientes del CLS (fila 0) y parches (filas 1..N)
+    // -----------------------------------------------------------------------
+    Matrix grad_cls     = grad_output.slice(0, 1);               // (1, d_model)
+    Matrix grad_patches = grad_output.slice(1, num_patches_ + 1); // (num_patches, d_model)
+
+    // -----------------------------------------------------------------------
+    // Paso 2: Actualizar pos_embeddings_   pos_emb -= lr * grad_output
+    // -----------------------------------------------------------------------
+    int total_pos = (num_patches_ + 1) * d_model_;
+    int bpos = (total_pos + threads - 1) / threads;
+    param_update_kernel<<<bpos, threads>>>(
+        pos_embeddings_.d_data, grad_output.d_data,
+        learning_rate, total_pos
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 3: Actualizar cls_token_   cls_token -= lr * grad_cls
+    // -----------------------------------------------------------------------
+    int bcls = (d_model_ + threads - 1) / threads;
+    param_update_kernel<<<bcls, threads>>>(
+        cls_token_.d_data, grad_cls.d_data,
+        learning_rate, d_model_
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 4: Backprop a traves de la proyeccion lineal
+    //   grad_flat = grad_patches @ W_proj.T   -> (num_patches, patch_dim)
+    //   grad_W    = patches_flat.T @ grad_patches -> (patch_dim, d_model)
+    //   grad_b    = col_mean(grad_patches)        -> (1, d_model)
+    // -----------------------------------------------------------------------
+    Matrix grad_flat = grad_patches.dot(W_proj_.transpose());
+    Matrix grad_W    = patches_flat_cache_.transpose().dot(grad_patches);
+    Matrix grad_b    = grad_patches.col_mean();
+
+    int total_W = patch_dim_ * d_model_;
+    int bW = (total_W + threads - 1) / threads;
+    param_update_kernel<<<bW, threads>>>(
+        W_proj_.d_data, grad_W.d_data,
+        learning_rate, total_W
+    );
+    cudaDeviceSynchronize();
+
+    int bb = (d_model_ + threads - 1) / threads;
+    param_update_kernel<<<bb, threads>>>(
+        b_proj_.d_data, grad_b.d_data,
+        learning_rate, d_model_
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 5: Reconstruir gradiente del feature map desde grad_flat
+    // -----------------------------------------------------------------------
+    Tensor3D grad_feature_map(feature_c_, feature_h_, feature_w_, 0.0);
+
+    int num_patches_h = feature_h_ / patch_h_;
+    int num_patches_w = feature_w_ / patch_w_;
+    int rblocks = (num_patches_ + threads - 1) / threads;
+    reconstruct_patches_kernel<<<rblocks, threads>>>(
+        grad_flat.d_data,
+        grad_feature_map.d_data,
+        feature_c_, feature_h_, feature_w_,
+        patch_h_, patch_w_,
+        num_patches_h, num_patches_w
+    );
+    cudaDeviceSynchronize();
+
+    // -----------------------------------------------------------------------
+    // Paso 6: Backprop a traves de la CNN  (pool -> relu -> conv)
+    // -----------------------------------------------------------------------
+    Tensor3D grad_pool  = pool_layer_.backward(grad_feature_map);
+    Tensor3D grad_relu  = relu_layer_.backward(grad_pool);
+    Tensor3D grad_image = conv_layer_.backward(grad_relu, learning_rate);
+
+    return grad_image;
 }
