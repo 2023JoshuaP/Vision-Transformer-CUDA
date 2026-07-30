@@ -77,6 +77,31 @@ __global__ void kernel_slice(const double *src, double *dst,
     }
 }
 
+__global__ void kernel_slice_cols(const double *src, double *dst,
+                                  int start_col, int n_cols, int src_cols, int rows) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < rows * n_cols) {
+        int r = idx / n_cols;
+        int c = idx % n_cols;
+        dst[r * n_cols + c] = src[r * src_cols + start_col + c];
+    }
+}
+
+__global__ void kernel_concat_cols(const double *a, const double *b, double *dst,
+                                   int cols_a, int cols_b, int rows) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int dst_cols = cols_a + cols_b;
+    if (idx < rows * dst_cols) {
+        int r = idx / dst_cols;
+        int c = idx % dst_cols;
+        if (c < cols_a) {
+            dst[idx] = a[r * cols_a + c];
+        } else {
+            dst[idx] = b[r * cols_b + (c - cols_a)];
+        }
+    }
+}
+
 __global__ void kernel_reduce_sum(const double *data, double *partial, int n) {
     extern __shared__ double sdata[];
 
@@ -263,6 +288,27 @@ Matrix Matrix::slice(int start_row, int end_row) const {
     Matrix res(n_rows, cols);
     int n = n_rows * cols;
     kernel_slice<<<grid1d(n), 256>>>(d_data, res.d_data, start_row, n_rows, cols);
+    CUDA_CHECK(cudaGetLastError());
+    return res;
+}
+
+Matrix Matrix::slice_cols(int start_col, int end_col) const {
+    int n_cols = end_col - start_col;
+    Matrix res(rows, n_cols);
+    int n = rows * n_cols;
+    kernel_slice_cols<<<grid1d(n), 256>>>(d_data, res.d_data, start_col, n_cols, cols, rows);
+    CUDA_CHECK(cudaGetLastError());
+    return res;
+}
+
+Matrix Matrix::concat_cols(const Matrix &other) const {
+    if (rows != other.rows) {
+        throw runtime_error("Row mismatch in concat_cols");
+    }
+    int n_cols = cols + other.cols;
+    Matrix res(rows, n_cols);
+    int n = rows * n_cols;
+    kernel_concat_cols<<<grid1d(n), 256>>>(d_data, other.d_data, res.d_data, cols, other.cols, rows);
     CUDA_CHECK(cudaGetLastError());
     return res;
 }
