@@ -117,35 +117,75 @@ MultiHeadAttention::~MultiHeadAttention() {
     // Los objetos Matrix se liberan automaticamente con su destructor.
 }
 
+static inline int grid1d(int n, int block = 256) {
+    return (n + block - 1) / block;
+}
+
 Matrix MultiHeadAttention::forward(const Matrix& input) {
-    // TODO:
     // 1. Guardar input en input_cache_.
-    //
+    input_cache_ = input;
+    
+    int seq_len = input.rows;
+    
     // 2. Proyectar la entrada:
-    //    Q = input.dot(Wq) + bq   -> (seq_len, d_model)
-    //    K = input.dot(Wk) + bk   -> (seq_len, d_model)
-    //    V = input.dot(Wv) + bv   -> (seq_len, d_model)
-    //
-    // 3. Dividir Q, K, V en num_heads cabezas:
-    //    Para cada cabeza h (0..num_heads-1):
-    //      Q_h = columnas [h*d_k .. (h+1)*d_k) de Q  -> (seq_len, d_k)
-    //      K_h = columnas [h*d_k .. (h+1)*d_k) de K  -> (seq_len, d_k)
-    //      V_h = columnas [h*d_k .. (h+1)*d_k) de V  -> (seq_len, d_k)
-    //
-    // 4. Para cada cabeza, calcular atencion escalada:
-    //    scores_h = Q_h.dot(K_h.transpose()) / sqrt(d_k)  -> (seq_len, seq_len)
-    //    weights_h = softmax(scores_h)                      -> (seq_len, seq_len)
-    //    context_h = weights_h.dot(V_h)                     -> (seq_len, d_k)
-    //    Guardar weights_h y context_h en cache.
-    //
-    // 5. Concatenar los context de todas las cabezas:
-    //    concat = [context_0 | context_1 | ... | context_{h-1}] -> (seq_len, d_model)
-    //
+    Matrix Q = input.dot(Wq_);
+    add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(Q.d_data, bq_.d_data, Q.d_data, seq_len, d_model_);
+    CUDA_CHECK(cudaGetLastError());
+    Q_cache_ = Q;
+    
+    Matrix K = input.dot(Wk_);
+    add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(K.d_data, bk_.d_data, K.d_data, seq_len, d_model_);
+    CUDA_CHECK(cudaGetLastError());
+    K_cache_ = K;
+    
+    Matrix V = input.dot(Wv_);
+    add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(V.d_data, bv_.d_data, V.d_data, seq_len, d_model_);
+    CUDA_CHECK(cudaGetLastError());
+    V_cache_ = V;
+    
+    attention_weights_.clear();
+    context_cache_.clear();
+    
+    Matrix concat;
+    
+    for (int h = 0; h < num_heads_; h++) {
+        // 3. Dividir Q, K, V en num_heads cabezas:
+        int start_col = h * d_k_;
+        int end_col = start_col + d_k_;
+        
+        Matrix Q_h = Q.slice_cols(start_col, end_col);
+        Matrix K_h = K.slice_cols(start_col, end_col);
+        Matrix V_h = V.slice_cols(start_col, end_col);
+        
+        // 4. Calcular atencion escalada:
+        Matrix K_h_T = K_h.transpose();
+        Matrix scores_h = Q_h.dot(K_h_T);
+        scores_h = scores_h / sqrt((double)d_k_);
+        
+        Matrix weights_h(scores_h.rows, scores_h.cols);
+        softmax_kernel<<<scores_h.rows, 256>>>(scores_h.d_data, weights_h.d_data, scores_h.rows, scores_h.cols);
+        CUDA_CHECK(cudaGetLastError());
+        
+        attention_weights_.push_back(weights_h);
+        
+        Matrix context_h = weights_h.dot(V_h);
+        context_cache_.push_back(context_h);
+        
+        // 5. Concatenar los context
+        if (h == 0) {
+            concat = context_h;
+        } else {
+            concat = concat.concat_cols(context_h);
+        }
+    }
+    
     // 6. Proyectar la concatenacion:
-    //    output = concat.dot(Wo) + bo  -> (seq_len, d_model)
-    //
+    Matrix output = concat.dot(Wo_);
+    add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(output.d_data, bo_.d_data, output.d_data, seq_len, d_model_);
+    CUDA_CHECK(cudaGetLastError());
+    
     // 7. Retornar output.
-    return input; // placeholder
+    return output;
 }
 
 Matrix MultiHeadAttention::backward(const Matrix& grad_output, double learning_rate) {
