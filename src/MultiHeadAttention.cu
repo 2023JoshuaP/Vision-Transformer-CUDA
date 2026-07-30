@@ -20,11 +20,22 @@
 
 MultiHeadAttention::MultiHeadAttention(int d_model, int num_heads, int seed)
     : d_model_(d_model), num_heads_(num_heads), d_k_(d_model / num_heads) {
-    // TODO:
-    // 1. Verificar que d_model sea divisible entre num_heads.
-    // 2. Inicializar las matrices de peso Wq, Wk, Wv, Wo (d_model, d_model)
-    //    con Xavier initialization en la GPU.
-    // 3. Inicializar los sesgos bq, bk, bv, bo (1, d_model) a cero.
+    if (d_model_ % num_heads_ != 0) {
+        throw std::invalid_argument("d_model must be divisible by num_heads");
+    }
+
+    std::mt19937 rng(seed);
+    double xavier_scale = sqrt(2.0 / (d_model + d_model));
+
+    Wq_ = gpu_random(d_model, d_model, xavier_scale, rng);
+    Wk_ = gpu_random(d_model, d_model, xavier_scale, rng);
+    Wv_ = gpu_random(d_model, d_model, xavier_scale, rng);
+    Wo_ = gpu_random(d_model, d_model, xavier_scale, rng);
+
+    bq_ = gpu_zeros(1, d_model);
+    bk_ = gpu_zeros(1, d_model);
+    bv_ = gpu_zeros(1, d_model);
+    bo_ = gpu_zeros(1, d_model);
 }
 
 MultiHeadAttention::~MultiHeadAttention() {
