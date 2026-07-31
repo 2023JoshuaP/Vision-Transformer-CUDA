@@ -1,3 +1,11 @@
+/**
+ * Archivo: PatchEmbedding.cuh
+ * Descripcion: Convierte la vision por computadora en un problema secuencial de Procesamiento de Lenguaje.
+ * Rol en ViT: Toma el mapa de caracteristicas de la CNN, lo recorta en 'parches', 
+ * aplana los parches en vectores, inyecta el token de clasificacion [CLS] y suma las 
+ * posiciones espaciales (Positional Encoding) para que el Transformer sepa el orden original.
+ */
+
 #pragma once
 
 #include "ActivationLayer.cuh"

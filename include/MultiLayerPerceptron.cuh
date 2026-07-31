@@ -1,3 +1,11 @@
+/**
+ * Archivo: MultiLayerPerceptron.cuh
+ * Descripcion: Red neuronal densa (Feed-Forward) de dos capas con activacion GELU.
+ * Rol en ViT: Se encuentra al final de cada Transformer Encoder. Tras recibir 
+ * la informacion combinada por la atencion, el MLP expande las dimensiones no linealmente
+ * para enriquecer la representacion de cada parche de forma independiente.
+ */
+
 #pragma once
 
 #include "Matrix.cuh"

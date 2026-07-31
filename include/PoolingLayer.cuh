@@ -1,3 +1,11 @@
+/**
+ * Archivo: PoolingLayer.cuh
+ * Descripcion: Implementa Max Pooling 2D en CUDA para reduccion de dimensionalidad.
+ * Rol en ViT: Filtra los rasgos mas dominantes del mapa convolucional y 
+ * reduce la resolucion espacial, disminuyendo la carga computacional y la longitud 
+ * total de la secuencia antes de inyectarse a los pesados bloques Transformer.
+ */
+
 #pragma once
 
 #include "Tensor3D.cuh"

@@ -1,3 +1,11 @@
+/**
+ * Archivo: ConvolutionalLayer.cuh
+ * Descripcion: Implementa la convolucion 2D altamente paralela usando CUDA.
+ * Rol en ViT: Es la etapa frontal (Front-End) del Vision Transformer Hibrido.
+ * Su funcion es extraer bordes, texturas y formas espaciales de la imagen cruda 28x28,
+ * transformandola en mapas de caracteristicas ricos antes de dividirse en secuencias.
+ */
+
 #pragma once
 
 #include "Tensor3D.cuh"

@@ -1,3 +1,11 @@
+/**
+ * Archivo: MultiHeadAttention.cuh
+ * Descripcion: Implementa el mecanismo central 'Scaled Dot-Product Attention' fraccionado.
+ * Rol en ViT: Calcula la relevancia que tiene cada parche de la imagen respecto a todos 
+ * los demas parches en paralelo (Self-Attention). Al dividir el calculo en multiples 'cabezas',
+ * permite al modelo enfocarse simultaneamente en distintas caracteristicas espaciales.
+ */
+
 #pragma once
 
 #include "Matrix.cuh"

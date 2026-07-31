@@ -1,3 +1,11 @@
+/**
+ * Archivo: ConvolutionalNetwork.cuh
+ * Descripcion: Orquesta el bloque convolucional completo (CNN).
+ * Rol en ViT: Actua como un contenedor que enlaza la ConvolutionalLayer,
+ * la ActivationLayer (ReLU) y la PoolingLayer. Permite procesar la imagen de entrada
+ * a traves de todo el pipeline espacial con una sola llamada forward/backward.
+ */
+
 #pragma once
 
 #include "Tensor3D.cuh"
