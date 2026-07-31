@@ -152,7 +152,52 @@ pair<Matrix, Matrix> DataLoader::load_csv_data(const string &csv_path, const str
     return {move(X), move(Y)};
 }
 
-/* Accuracy calculate */
+pair<vector<Tensor3D>, Matrix> DataLoader::load_mnist_csv_to_tensor(const string& csv_path, int limit) {
+    ifstream file(csv_path);
+    if (!file.is_open()) {
+        cerr << "Could not open csv file: " << csv_path << endl;
+        throw runtime_error("Could not open csv file");
+    }
+
+    vector<Tensor3D> images;
+    vector<int> labels;
+
+    string line;
+    int count = 0;
+    while (getline(file, line)) {
+        if (limit > 0 && count >= limit) break;
+        if (line.empty()) continue;
+
+        stringstream ss(line);
+        string token;
+        getline(ss, token, ',');
+        int label = stoi(token);
+        labels.push_back(label);
+
+        vector<double> img_data(28 * 28);
+        int i = 0;
+        while (getline(ss, token, ',') && i < 784) {
+            img_data[i++] = stod(token) / 255.0;
+        }
+
+        Tensor3D t(1, 28, 28);
+        t.fromHost(img_data.data());
+        images.push_back(move(t));
+        count++;
+    }
+
+    int N = labels.size();
+    vector<double> h_Y(N * 10, 0.0);
+    for (int i = 0; i < N; i++) {
+        h_Y[i * 10 + labels[i]] = 1.0;
+    }
+
+    Matrix Y(N, 10);
+    Y.fromHost(h_Y.data());
+
+    return {move(images), move(Y)};
+}
+
 double DataLoader::accuracy(const Matrix& predictions, const Matrix& trues) {
     int total = predictions.rows;
     int cols = predictions.cols;
