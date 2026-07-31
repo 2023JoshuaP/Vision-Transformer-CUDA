@@ -40,6 +40,8 @@ struct Matrix {
 
     Matrix col_mean() const;
     Matrix slice(int start_row, int end_row) const;
+    Matrix slice_cols(int start_col, int end_col) const;
+    Matrix concat_cols(const Matrix &other) const;
 
     double sum() const;
     double mean() const;

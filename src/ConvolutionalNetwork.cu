@@ -92,30 +92,6 @@ void ConvolutionalNetwork::backward(const Matrix &y_true) {
     if (!built_) throw runtime_error("Network must be built before calling backward.");
 
     mlp_classificator_->backward(mlp_activations_, y_true);
-    
-    // NOTA: Para el Vision Transformer Híbrido, la CNN actuará mayormente como
-    // el Patch Embedding / extractor de características. 
-    // Como el MLP original no expone getInputGradient(), comentamos temporalmente el 
-    // enlace del backprop hacia la CNN. Si se usa end-to-end, requerirá añadir ese método al MLP.
-    
-    /*
-    Matrix grad_flat = mlp_classificator_->getInputGradient();
-    Tensor3D grad = Tensor3D::reconstructureFlatMatrix(grad_flat, flatten_input_cache_.channels, flatten_input_cache_.height, flatten_input_cache_.width);
-    for (int i = layer_order_.size() - 1; i >= 0; i--) {
-        auto &[type, index] = layer_order_[i];
-        switch (type) {
-            case LayerType::Convolution:
-                grad = conv_layers_[index].backward(grad, learning_rate_);
-                break;
-            case LayerType::ReLU:
-                grad = activation_layers_[index].backward(grad);
-                break;
-            case LayerType::Pooling:
-                grad = pooling_layers_[index].backward(grad);
-                break;
-        }
-    }
-    */
 }
 
 TrainHistory ConvolutionalNetwork::train(const vector<Tensor3D> &X_train, const Matrix &y_train, int epochs, int batch_size,
