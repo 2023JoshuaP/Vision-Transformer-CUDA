@@ -17,22 +17,93 @@ El modelo combina la capacidad de extracción de características locales de las
 
 ## Organización del Código y Archivos
 
-El repositorio está fuertemente estructurado para maximizar el uso de VRAM de forma eficiente, dividiéndose en `include/` (cabeceras `.cuh`) y `src/` (implementaciones `.cu`).
+El repositorio está estructurado en dos capas: `include/` contiene las cabeceras `.cuh` con las declaraciones públicas de cada clase, y `src/` contiene las implementaciones `.cu` con los kernels de CUDA y la lógica completa de cada módulo. A continuación se describe el rol técnico de cada archivo y los pasos que sigue internamente.
 
-* **Estructuras de Memoria Base**:
-  * `Matrix.cu` / `Tensor3D.cu`: Gestionan las ubicaciones de memoria contigua dentro de la VRAM. Permiten hacer copias rápidas `toHost` (a CPU) y `fromHost` (a GPU).
-* **Módulo Convolucional**:
-  * `ConvolutionalLayer.cu`: Lanza hilos de CUDA para procesar píxeles a través de kernels de imagen de forma simultánea.
-  * `PoolingLayer.cu` / `ActivationLayer.cu`: Reduce la dimensionalidad utilizando submuestreo espacial (MaxPooling).
-  * `PatchEmbedding.cu`: Envuelve la CNN, recorta en parches y aplica el embedding.
-* **Módulo Transformer**:
-  * `MultiHeadAttention.cu`: Aplica Scaled Dot-Product Attention partiendo los cálculos en múltiples "cabezas" matemáticas que se ejecutan en paralelo en los *Streaming Multiprocessors* de NVIDIA.
-  * `MultiLayerPerceptron.cu` / `TransformerEncoder.cu`: Crea el bloque residual con activación GELU nativa.
-  * `LayerNorm.cu`: Normaliza las medias y varianzas utilizando reducciones por bloques en CUDA.
-* **Orquestación**:
-  * `VisionTransformer.cu`: La clase maestra. Conecta las piezas en la fase `forward` y traza todo el cálculo de gradientes a la inversa durante la fase `backward`. También implementa el descenso de gradiente (Actualización de Pesos).
-  * `DataLoader.cu`: Procesa los archivos `.csv` en tiempo real y asigna los datos en memoria.
-  * `main.cu`: Ciclo principal del programa, define arquitecturas, entrena por épocas y exporta resultados mediante OpenCV.
+---
+
+### Cimientos: Memoria en la GPU
+
+#### `src/Matrix.cu` y `src/Tensor3D.cu`
+Son los bloques de construcción fundamentales de todo el sistema. Antes de que cualquier kernel pueda ejecutarse, el dato debe existir en la VRAM de la GPU.
+
+- **`Matrix`**: Representa una matriz 2D (`rows x cols`) cuya memoria vive directamente en la VRAM (`d_data`). Implementa las operaciones algebraicas clave como multiplicación de matrices (`.dot()`), transpuesta, suma, escalado y extracción de filas/columnas (`slice_cols`). Internamente, cada operación lanza un kernel paralelo donde cada hilo procesa uno o varios elementos simultáneamente.
+- **`Tensor3D`**: Extiende la misma idea a volúmenes 3D (`channels x height x width`), el formato natural de una imagen. Permite aplanar el volumen a una `Matrix` mediante `.flatten()` y reconstruirlo con `Tensor3D::reconstructureFlatMatrix()`, operaciones esenciales para conectar la CNN con el Transformer.
+- Ambas clases implementan **move semantics** de C++17, garantizando que los bloques de VRAM se transfieran sin copias innecesarias entre capas.
+
+---
+
+### Módulo Convolucional: Extracción Visual
+
+#### `src/ConvolutionalLayer.cu`
+Implementa la convolución 2D paralela en CUDA. Su flujo interno es:
+1. Recibe un `Tensor3D` de entrada (imagen o mapa de características).
+2. Lanza un kernel donde cada hilo es responsable de calcular **un único valor de salida**: toma la ventana de `kernel_size x kernel_size` píxeles correspondiente, la multiplica elemento a elemento con los pesos del filtro y suma el resultado.
+3. Durante `backward`, calcula el gradiente respecto a los pesos del filtro (`grad_W`) y el gradiente respecto a la entrada (`grad_input`) usando convolución transpuesta, actualizando los filtros con SGD.
+
+#### `src/ActivationLayer.cu` y `src/PoolingLayer.cu`
+- **`ActivationLayer` (ReLU)**: Cada hilo aplica `max(0, x)` a un elemento. En `backward` pasa el gradiente solo donde la activación fue positiva (máscara binaria).
+- **`PoolingLayer` (Max Pooling)**: Divide el mapa de características en ventanas de `pool_size x pool_size` y cada hilo encuentra el máximo local. Guarda en caché las posiciones de los máximos para el `backward`, donde el gradiente se redirige exclusivamente al elemento que ganó.
+
+#### `src/PatchEmbedding.cu`
+Es el puente entre el mundo convolucional y el mundo secuencial del Transformer. Sus pasos internos son:
+1. Pasa la imagen por la CNN completa: `ConvolutionalLayer → ReLU → MaxPooling`.
+2. **`extract_patches_kernel`**: Divide el mapa de características resultante en una cuadrícula de parches de `patch_h x patch_w`. Cada parche se aplana y se copia como una fila de la matriz de salida.
+3. Proyecta linealmente cada parche desde `patch_dim` a `d_model` multiplicando por la matriz `W_proj`.
+4. Antepone el token `[CLS]` como la fila 0 de la secuencia, que actuará como el "resumen" global de la imagen.
+5. Suma los `pos_embeddings` a toda la secuencia para que el Transformer tenga noción de la posición espacial de cada parche.
+6. En `backward`, propaga los gradientes en orden inverso: actualiza los embeddings posicionales, el token CLS, la proyección `W_proj`, reconstruye el gradiente del mapa de características con **`reconstruct_patches_kernel`** (usando `atomicAdd` para evitar condiciones de carrera) y finalmente retropropaga por la CNN.
+
+---
+
+### Módulo Transformer: Razonamiento Global
+
+#### `src/MultiHeadAttention.cu`
+Es el componente más complejo matemáticamente. Su ejecución sigue estos pasos:
+1. **Proyección QKV**: Multiplica la entrada `X` por tres matrices de pesos (`Wq`, `Wk`, `Wv`) para obtener las matrices Query, Key y Value.
+2. **División en cabezas**: Las matrices se dividen en `num_heads` secciones de dimensión `d_k = d_model / num_heads`. Esto permite que cada cabeza aprenda relaciones distintas en paralelo.
+3. **Scaled Dot-Product Attention** (por cabeza): Calcula `scores = Q_h · K_h^T / √d_k`. El escalado por `√d_k` previene que los productos internos sean demasiado grandes y saturen el Softmax. Un kernel dedicado aplica el Softmax estable numéricamente (restando el máximo por fila antes de exponenciar). Finalmente, `context = softmax(scores) · V_h`.
+4. **Concatenación y proyección de salida**: Los contextos de todas las cabezas se concatenan horizontalmente y se proyectan con `Wo` para retornar a la dimensión `d_model`.
+
+#### `src/LayerNorm.cu`
+Normaliza cada vector de la secuencia a media 0 y varianza 1, luego aplica los parámetros aprendibles `γ` (gamma) y `β` (beta). Sus kernels siguen cuatro pasos:
+1. **`layernorm_mean_kernel`**: Un bloque por fila, usa shared memory y reducción paralela para calcular la media de cada vector en `O(log D)`.
+2. **`layernorm_variance_kernel`**: Mismo patrón, calcula la varianza usando la media ya disponible.
+3. **`layernorm_normalize_kernel`**: Normaliza elemento a elemento y aplica `γ` y `β`. Guarda el valor normalizado `x̂` en caché para el backward.
+4. **`layernorm_backward_kernel`**: Implementa la fórmula exacta de la derivada de LayerNorm, que requiere dos pasadas de reducción: una para `∑(dx̂)` y otra para `∑(dx̂ · x̂)`. Acumula `grad_gamma` y `grad_beta` con `atomicAdd` y actualiza ambos parámetros con SGD.
+
+#### `src/MultiLayerPerceptron.cu` y `src/TransformerEncoder.cu`
+- **`MultiLayerPerceptron`**: Red de dos capas lineales (`d_model → mlp_dim → d_model`) con activación GELU entre ellas. GELU es diferenciable y empíricamente supera a ReLU en Transformers.
+- **`TransformerEncoderBlock`**: Ensambla el bloque completo siguiendo la arquitectura Pre-Norm:
+  1. `x → LayerNorm1 → MultiHeadAttention → + x` (conexión residual)
+  2. `z → LayerNorm2 → MLP → + z` (segunda conexión residual)
+  Las conexiones residuales son críticas: permiten que el gradiente fluya directamente hacia capas anteriores sin desvanecerse, haciendo posible el entrenamiento de redes profundas.
+
+---
+
+### Orquestación del Sistema
+
+#### `src/VisionTransformer.cu`
+La clase maestra que integra todo el pipeline de extremo a extremo:
+- **`forward(imagen)`**: Ejecuta secuencialmente `PatchEmbedding → N×TransformerEncoderBlock → extrae fila [CLS] → LayerNorm final → W_head`. Guarda en caché los resultados intermedios de cada etapa.
+- **`backward(y_true)`**: Calcula el gradiente de Cross-Entropy respecto a los logits, retropropaga por la cabeza de clasificación, el LayerNorm final, reconstruye el tensor de gradiente completo colocando el gradiente del CLS en la fila 0 (con ceros en el resto), recorre los bloques encoder en **orden inverso** y finalmente llama al `backward` del PatchEmbedding.
+- **`train(...)`**: Itera por épocas, hace shuffle del dataset, procesa muestra a muestra en batches, acumula la pérdida y el accuracy, evalúa en validación y soporta *early stopping* si la pérdida de validación no mejora en N épocas consecutivas.
+
+#### `src/DataLoader.cu`
+Responsable de cargar y preparar los datos desde el disco:
+- Lee el archivo `.csv` de MNIST línea a línea, parsea los valores separados por coma, normaliza los píxeles al rango `[0, 1]` dividiendo entre 255.
+- Convierte cada fila a un `Tensor3D(1, 28, 28)` llamando a `cudaMemcpy` para subir los píxeles directamente a la VRAM.
+- Codifica las etiquetas en formato **One-Hot** como una `Matrix` en GPU, el formato que requiere la función de pérdida Cross-Entropy.
+- Implementa `accuracy()` que compara el argmax de los logits predichos contra el argmax del label real.
+
+#### `main.cu`
+El punto de entrada del programa. Define la arquitectura completa y orquesta el ciclo de vida:
+1. Carga los 70,000 registros del MNIST (train + test CSV) y los unifica.
+2. Aplica shuffle aleatorio con semilla fija `42` para reproducibilidad.
+3. Divide en **70% Train / 15% Validación / 15% Test**.
+4. Instancia el `VisionTransformer` con todos sus hiperparámetros.
+5. Lanza el entrenamiento e imprime la pérdida y el accuracy por época.
+6. Evalúa la precisión final en el conjunto de Test (nunca visto durante el entrenamiento).
+7. Genera y guarda `resultados_prediccion.png` usando OpenCV: una cuadrícula 5x5 con 25 imágenes del Test mostrando la predicción del modelo vs. la etiqueta real.
 
 ---
 
