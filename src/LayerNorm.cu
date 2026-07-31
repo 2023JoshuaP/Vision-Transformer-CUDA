@@ -1,3 +1,11 @@
+/**
+ * Archivo: LayerNorm.cu
+ * Descripcion: Implementa Layer Normalization estocastico mediante reduccion paralela en CUDA.
+ * Rol en ViT: Vital para la arquitectura Transformer. Normaliza la media y varianza 
+ * de cada representacion en la secuencia. Previene que el gradiente explote o desaparezca,
+ * estabilizando el flujo de datos entre las cabezas de atencion y los bloques MLP.
+ */
+
 #include "LayerNorm.cuh"
 #include <cmath>
 #include <utility>

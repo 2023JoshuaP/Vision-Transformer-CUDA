@@ -1,3 +1,11 @@
+/**
+ * Archivo: Matrix.cu
+ * Descripcion: Estructura algebraica de bajo nivel alojada integramente en VRAM.
+ * Rol en ViT: Es el pilar de datos 2D del modelo. Soporta multiplicaciones masivas (cuBLAS/dot-product),
+ * transposiciones y cortes de tensores, permitiendo a las redes feed-forward y a la 
+ * multiplicacion QKV procesar todos los parches de imagenes al mismo tiempo.
+ */
+
 #include "Matrix.cuh"
 #include <cstring>
 #include <vector>

@@ -1,3 +1,11 @@
+/**
+ * Archivo: DataLoader.cu
+ * Descripcion: Gestiona la ingesta y preprocesamiento de datos desde el almacenamiento local.
+ * Rol en ViT: Carga archivos CSV masivos (MNIST), normaliza los pixeles [0,1],
+ * convierte las etiquetas a formato One-Hot y transfiere los batches enteros a la 
+ * memoria VRAM para evitar embotellamientos (bottlenecks) durante el entrenamiento.
+ */
+
 #include "DataLoader.cuh"
 #include <opencv2/opencv.hpp>
 #include <iostream>

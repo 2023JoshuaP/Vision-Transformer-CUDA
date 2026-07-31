@@ -1,3 +1,11 @@
+/**
+ * Archivo: VisionTransformer.cu
+ * Descripcion: Clase constructora e integradora (Orquestador Maestro) del modelo end-to-end.
+ * Rol en ViT: Conecta la CNN, el PatchEmbedding, los bloques Transformer y la cabeza 
+ * final de clasificacion. Controla todo el ciclo de vida del aprendizaje: calcula el Loss, 
+ * dirige el Backward propagation por todos los bloques y actualiza los pesos de la VRAM.
+ */
+
 #include "VisionTransformer.cuh"
 #include <iostream>
 #include <iomanip>

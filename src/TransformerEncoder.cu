@@ -1,3 +1,11 @@
+/**
+ * Archivo: TransformerEncoder.cu
+ * Descripcion: Bloque residual completo (Pre-Norm) de la arquitectura Transformer.
+ * Rol en ViT: Empaqueta la Secuencia de Parches procesandola a traves de: 
+ * (LayerNorm -> Atencion -> Add) -> (LayerNorm -> MLP -> Add). Estos bloques 
+ * se apilan N veces en la arquitectura para construir la intuicion y contexto de la imagen.
+ */
+
 #include "TransformerEncoder.cuh"
 #include <cmath>
 

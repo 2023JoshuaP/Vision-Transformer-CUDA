@@ -1,3 +1,11 @@
+/**
+ * Archivo: Tensor3D.cu
+ * Descripcion: Estructura algebraica de bajo nivel para arreglos volumetricos en VRAM.
+ * Rol en ViT: Es el portador de imagenes original. Almacena las dimensiones de
+ * (Canales, Altura, Anchura). Es crucial para pasar la data visual a traves de la CNN 
+ * antes de que la imagen sea finalmente aplanada a una Matrix.
+ */
+
 #include "Tensor3D.cuh"
 #include <iostream>
 
