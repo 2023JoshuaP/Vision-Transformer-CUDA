@@ -96,6 +96,31 @@ PoolingLayer::~PoolingLayer() {
     }
 }
 
+PoolingLayer::PoolingLayer(PoolingLayer&& other) noexcept
+    : pool_size_(other.pool_size_), stride_(other.stride_), type_(other.type_),
+      d_selected_indices_(other.d_selected_indices_), allocated_indices_size_(other.allocated_indices_size_),
+      input_height_(other.input_height_), input_width_(other.input_width_), input_channels_(other.input_channels_) {
+    other.d_selected_indices_ = nullptr;
+    other.allocated_indices_size_ = 0;
+}
+
+PoolingLayer& PoolingLayer::operator=(PoolingLayer&& other) noexcept {
+    if (this != &other) {
+        if (d_selected_indices_) cudaFree(d_selected_indices_);
+        pool_size_ = other.pool_size_;
+        stride_ = other.stride_;
+        type_ = other.type_;
+        d_selected_indices_ = other.d_selected_indices_;
+        allocated_indices_size_ = other.allocated_indices_size_;
+        input_height_ = other.input_height_;
+        input_width_ = other.input_width_;
+        input_channels_ = other.input_channels_;
+        other.d_selected_indices_ = nullptr;
+        other.allocated_indices_size_ = 0;
+    }
+    return *this;
+}
+
 int PoolingLayer::output_size(int input_size, int kernel, int stride) {
     return (input_size - kernel) / stride + 1;
 }

@@ -150,6 +150,37 @@ ConvolutionalLayer::~ConvolutionalLayer() {
     if (d_biases_) cudaFree(d_biases_);
 }
 
+ConvolutionalLayer::ConvolutionalLayer(ConvolutionalLayer&& other) noexcept
+    : input_channels_(other.input_channels_), output_channels_(other.output_channels_),
+      kernel_(other.kernel_), stride_(other.stride_), padding_(other.padding_),
+      d_kernels_(other.d_kernels_), d_biases_(other.d_biases_),
+      input_cache_(move(other.input_cache_)), input_height_(other.input_height_), input_width_(other.input_width_) {
+    other.d_kernels_ = nullptr;
+    other.d_biases_ = nullptr;
+}
+
+ConvolutionalLayer& ConvolutionalLayer::operator=(ConvolutionalLayer&& other) noexcept {
+    if (this != &other) {
+        if (d_kernels_) cudaFree(d_kernels_);
+        if (d_biases_) cudaFree(d_biases_);
+
+        input_channels_ = other.input_channels_;
+        output_channels_ = other.output_channels_;
+        kernel_ = other.kernel_;
+        stride_ = other.stride_;
+        padding_ = other.padding_;
+        d_kernels_ = other.d_kernels_;
+        d_biases_ = other.d_biases_;
+        input_cache_ = move(other.input_cache_);
+        input_height_ = other.input_height_;
+        input_width_ = other.input_width_;
+
+        other.d_kernels_ = nullptr;
+        other.d_biases_ = nullptr;
+    }
+    return *this;
+}
+
 int ConvolutionalLayer::size_out(int input_size, int kernel, int stride, int padding) {
     return (input_size - kernel + 2 * padding) / stride + 1;
 }

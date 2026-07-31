@@ -14,6 +14,8 @@ public:
 
     PoolingLayer(const PoolingLayer&) = delete;
     PoolingLayer& operator=(const PoolingLayer&) = delete;
+    PoolingLayer(PoolingLayer&& other) noexcept;
+    PoolingLayer& operator=(PoolingLayer&& other) noexcept;
 
     Tensor3D forward(const Tensor3D& input);
     Tensor3D backward(const Tensor3D& gradient_output) const;
