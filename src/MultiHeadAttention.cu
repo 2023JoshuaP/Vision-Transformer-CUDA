@@ -6,7 +6,6 @@ __global__ void softmax_kernel(const double* input, double* output, int rows, in
     int tid = threadIdx.x;
     
     if (row < rows) {
-        // Encontrar el maximo para estabilidad numerica
         double max_val = -INFINITY;
         for (int col = tid; col < cols; col += blockDim.x) {
             if (input[row * cols + col] > max_val) {
@@ -14,7 +13,6 @@ __global__ void softmax_kernel(const double* input, double* output, int rows, in
             }
         }
         
-        // Reduccion para el maximo
         __shared__ double shared_max[256];
         shared_max[tid] = max_val;
         __syncthreads();
@@ -29,15 +27,13 @@ __global__ void softmax_kernel(const double* input, double* output, int rows, in
         }
         max_val = shared_max[0];
         
-        // Calcular exponenciales y suma local
         double sum_exp = 0.0;
         for (int col = tid; col < cols; col += blockDim.x) {
             double val = exp(input[row * cols + col] - max_val);
-            output[row * cols + col] = val; // Guardar temporalmente
+            output[row * cols + col] = val;
             sum_exp += val;
         }
         
-        // Reduccion para la suma
         __shared__ double shared_sum[256];
         shared_sum[tid] = sum_exp;
         __syncthreads();
@@ -50,7 +46,6 @@ __global__ void softmax_kernel(const double* input, double* output, int rows, in
         }
         sum_exp = shared_sum[0];
         
-        // Dividir por la suma total
         for (int col = tid; col < cols; col += blockDim.x) {
             output[row * cols + col] /= sum_exp;
         }
@@ -113,21 +108,17 @@ MultiHeadAttention::MultiHeadAttention(int d_model, int num_heads, int seed)
     bo_ = gpu_zeros(1, d_model);
 }
 
-MultiHeadAttention::~MultiHeadAttention() {
-    // Los objetos Matrix se liberan automaticamente con su destructor.
-}
+MultiHeadAttention::~MultiHeadAttention() {}
 
 static inline int grid1d(int n, int block = 256) {
     return (n + block - 1) / block;
 }
 
 Matrix MultiHeadAttention::forward(const Matrix& input) {
-    // 1. Guardar input en input_cache_.
     input_cache_ = input;
     
     int seq_len = input.rows;
     
-    // 2. Proyectar la entrada:
     Matrix Q = input.dot(Wq_);
     add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(Q.d_data, bq_.d_data, Q.d_data, seq_len, d_model_);
     CUDA_CHECK(cudaGetLastError());
@@ -149,7 +140,6 @@ Matrix MultiHeadAttention::forward(const Matrix& input) {
     Matrix concat;
     
     for (int h = 0; h < num_heads_; h++) {
-        // 3. Dividir Q, K, V en num_heads cabezas:
         int start_col = h * d_k_;
         int end_col = start_col + d_k_;
         
@@ -157,7 +147,6 @@ Matrix MultiHeadAttention::forward(const Matrix& input) {
         Matrix K_h = K.slice_cols(start_col, end_col);
         Matrix V_h = V.slice_cols(start_col, end_col);
         
-        // 4. Calcular atencion escalada:
         Matrix K_h_T = K_h.transpose();
         Matrix scores_h = Q_h.dot(K_h_T);
         scores_h = scores_h / sqrt((double)d_k_);
@@ -171,7 +160,6 @@ Matrix MultiHeadAttention::forward(const Matrix& input) {
         Matrix context_h = weights_h.dot(V_h);
         context_cache_.push_back(context_h);
         
-        // 5. Concatenar los context
         if (h == 0) {
             concat = context_h;
         } else {
@@ -179,12 +167,9 @@ Matrix MultiHeadAttention::forward(const Matrix& input) {
         }
     }
     
-    // 6. Proyectar la concatenacion:
     Matrix output = concat.dot(Wo_);
     add_bias_kernel<<<grid1d(seq_len * d_model_), 256>>>(output.d_data, bo_.d_data, output.d_data, seq_len, d_model_);
     CUDA_CHECK(cudaGetLastError());
-    
-    // 7. Retornar output.
     return output;
 }
 
