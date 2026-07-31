@@ -1,4 +1,4 @@
-# Vision Transformer (ViT) Híbrido en CUDA
+# Vision Transformer (ViT) en CUDA
 
 Un proyecto académico de alto rendimiento que implementa un **Vision Transformer Híbrido** desde cero en **C++ puro y CUDA**. El modelo está diseñado para clasificar los dígitos de la base de datos MNIST sin depender de ningún framework de Deep Learning (como PyTorch o TensorFlow), gestionando los kernels de GPU, la memoria VRAM y el algoritmo de Backpropagation de forma manual y altamente paralela.
 
